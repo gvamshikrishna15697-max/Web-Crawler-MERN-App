@@ -21,14 +21,37 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function mongoTlsOptions() {
-  const insecure =
+/**
+ * `tlsInsecure` in the URI conflicts with driver option `tlsAllowInvalidCertificates`.
+ * Strip TLS-relax flags from the URI and return whether the user asked for insecure TLS.
+ */
+function normalizeMongoUri(rawUri) {
+  let insecureFromUri = false;
+  try {
+    const u = new URL(rawUri);
+    for (const key of ["tlsInsecure", "tlsAllowInvalidCertificates"]) {
+      if (!u.searchParams.has(key)) continue;
+      const v = (u.searchParams.get(key) || "").toLowerCase();
+      if (v === "true" || v === "1") {
+        insecureFromUri = true;
+      }
+      u.searchParams.delete(key);
+    }
+    return { uri: u.toString(), insecureFromUri };
+  } catch {
+    return { uri: rawUri, insecureFromUri: false };
+  }
+}
+
+function mongoTlsOptions({ insecureFromUri = false } = {}) {
+  const insecureEnv =
     process.env.MONGO_TLS_INSECURE === "true" ||
     process.env.MONGO_TLS_INSECURE === "1";
+  const insecure = insecureFromUri || insecureEnv;
   if (insecure) {
     // eslint-disable-next-line no-console
     console.warn(
-      "WARNING: MONGO_TLS_INSECURE is set — MongoDB TLS certificate verification is disabled (dev/troubleshooting only).",
+      "WARNING: Insecure Mongo TLS (tlsInsecure removed from URI and applied as tlsAllowInvalidCertificates). Dev/troubleshooting only — do not use in production.",
     );
   }
   return {
@@ -37,22 +60,30 @@ function mongoTlsOptions() {
   };
 }
 
-async function connectWithRetry(mongoUri, { attempts = 5 } = {}) {
+async function connectWithRetry(rawMongoUri, { attempts = 12 } = {}) {
+  const { uri: mongoUri, insecureFromUri } = normalizeMongoUri(rawMongoUri);
   let lastErr;
 
   for (let i = 0; i < attempts; i += 1) {
     try {
       await mongoose.connect(mongoUri, {
-        ...mongoTlsOptions(),
-        serverSelectionTimeoutMS: 30_000,
-        connectTimeoutMS: 30_000,
+        ...mongoTlsOptions({ insecureFromUri }),
+        serverSelectionTimeoutMS: 45_000,
+        connectTimeoutMS: 45_000,
         socketTimeoutMS: 120_000,
         maxPoolSize: 10,
       });
       return;
     } catch (err) {
       lastErr = err;
-      const backoffMs = Math.min(30_000, 1000 * 2 ** i);
+      try {
+        if (mongoose.connection.readyState !== 0) {
+          await mongoose.disconnect();
+        }
+      } catch {
+        // ignore
+      }
+      const backoffMs = Math.min(60_000, 1000 * 2 ** i);
       // eslint-disable-next-line no-console
       console.error(
         `Mongo connect failed (attempt ${i + 1}/${attempts}). Retrying in ${backoffMs}ms...`,
@@ -62,6 +93,10 @@ async function connectWithRetry(mongoUri, { attempts = 5 } = {}) {
     }
   }
 
+  // eslint-disable-next-line no-console
+  console.error(
+    "MongoDB could not connect. If TLS errors persist, keep tlsInsecure out of the URI (this app strips it) and use MONGO_TLS_INSECURE=true in server/.env for local dev only.",
+  );
   throw lastErr;
 }
 

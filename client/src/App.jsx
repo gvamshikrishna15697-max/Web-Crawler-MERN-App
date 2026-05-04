@@ -1,8 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
+/** Network-level failures (API down, wrong port) — DevTools often shows no status code. */
+async function apiFetch(url, init) {
+  try {
+    return await fetch(url, init);
+  } catch (e) {
+    const msg = e?.message || String(e);
+    const isNetwork =
+      e?.name === "TypeError" ||
+      /Failed to fetch|NetworkError|ECONNREFUSED|Load failed|network/i.test(msg);
+    if (isNetwork) {
+      throw new Error(
+        `Cannot reach the API (${url}). Start the backend on port 5000: from the project root run \`npm run dev\` (starts server + client), or in a second terminal run \`npm run dev\` inside the \`server\` folder. Original error: ${msg}`,
+      );
+    }
+    throw e;
+  }
+}
+
 async function fetchJson(url, init) {
-  const res = await fetch(url, init);
+  const res = await apiFetch(url, init);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`HTTP ${res.status} ${res.statusText}${text ? ` — ${text}` : ""}`);
@@ -16,7 +34,7 @@ function sleep(ms) {
 
 /** POST /api/scrape/run returns 202 + jobId; work runs in background (avoids dev-proxy timeouts). */
 async function postScrapeJob(body) {
-  const res = await fetch("/api/scrape/run", {
+  const res = await apiFetch("/api/scrape/run", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body ?? {}),
@@ -48,11 +66,64 @@ async function pollScrapeJob(jobId, { timeoutMs = 30 * 60 * 1000 } = {}) {
   );
 }
 
+/** Open native date UI from a user gesture (whole bar, not only the typed segment). */
+function tryOpenDatePicker(input) {
+  if (!input) return;
+  if (typeof input.showPicker === "function") {
+    try {
+      input.showPicker();
+      return;
+    } catch {
+      // NotAllowedError / NotSupportedError — fall back to focus
+    }
+  }
+  input.focus();
+}
+
 function formatDate(d) {
   if (!d) return "";
   const dt = new Date(d);
   if (Number.isNaN(dt.getTime())) return "";
   return dt.toLocaleString();
+}
+
+/** e.g. "May 5" — month name + day (locale-aware), for quick scanning. */
+function formatDateMonthDay(d) {
+  if (!d) return "";
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return "";
+  const s = dt.toLocaleString(undefined, { month: "long", day: "numeric" });
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
+}
+
+/** Calendar day from input `type="date"` (YYYY-MM-DD). */
+function isYmd(s) {
+  return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+
+function localDayStartIso(ymd) {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(y, m - 1, d, 0, 0, 0, 0).toISOString();
+}
+
+/** Exclusive range end: midnight at the start of the day after `ymd` (local). */
+function localDayAfterEndIso(ymd) {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const dt = new Date(y, m - 1, d, 0, 0, 0, 0);
+  dt.setDate(dt.getDate() + 1);
+  return dt.toISOString();
+}
+
+function appliedFromToApiIso(value) {
+  if (!value) return null;
+  if (isYmd(value)) return localDayStartIso(value);
+  return new Date(value).toISOString();
+}
+
+function appliedToToApiIso(value) {
+  if (!value) return null;
+  if (isYmd(value)) return localDayAfterEndIso(value);
+  return new Date(value).toISOString();
 }
 
 function buildArticleQuery(params) {
@@ -69,9 +140,8 @@ function buildArticleQuery(params) {
   if (q) search.set("q", q);
   if (locale) search.set("locale", locale);
   if (source) search.set("source", source);
-  if (fromApplied)
-    search.set("from", new Date(fromApplied).toISOString());
-  if (toApplied) search.set("to", new Date(toApplied).toISOString());
+  if (fromApplied) search.set("from", appliedFromToApiIso(fromApplied));
+  if (toApplied) search.set("to", appliedToToApiIso(toApplied));
   search.set("page", String(page));
   search.set("limit", String(limit));
   search.set("sort", "pubDateDesc");
@@ -98,6 +168,8 @@ function App() {
 
   const [lastRun, setLastRun] = useState(null);
   const [running, setRunning] = useState(false);
+  const fromDateRef = useRef(null);
+  const toDateRef = useRef(null);
 
   const queryString = useMemo(
     () =>
@@ -160,13 +232,9 @@ function App() {
   }
 
   function applyDateFilter() {
-    if (fromDraft && toDraft) {
-      const a = new Date(fromDraft).getTime();
-      const b = new Date(toDraft).getTime();
-      if (!Number.isNaN(a) && !Number.isNaN(b) && b < a) {
-        setError('"To" must be after "From".');
-        return;
-      }
+    if (fromDraft && toDraft && toDraft < fromDraft) {
+      setError('"To" must be on or after "From".');
+      return;
     }
     setError("");
     setFromApplied(fromDraft);
@@ -203,21 +271,15 @@ function App() {
       setError("Set both From and To, then fetch from Google for that range.");
       return;
     }
-    const a = new Date(fromDraft).getTime();
-    const b = new Date(toDraft).getTime();
-    if (Number.isNaN(a) || Number.isNaN(b)) {
-      setError("Invalid From or To date.");
-      return;
-    }
-    if (b <= a) {
-      setError('"To" must be after "From".');
+    if (toDraft < fromDraft) {
+      setError('"To" must be on or after "From".');
       return;
     }
     setRunning(true);
     setError("");
     try {
-      const fromIso = new Date(fromDraft).toISOString();
-      const toIso = new Date(toDraft).toISOString();
+      const fromIso = localDayStartIso(fromDraft);
+      const toIso = localDayAfterEndIso(toDraft);
       const jobId = await postScrapeJob({ from: fromIso, to: toIso });
       const run = await pollScrapeJob(jobId);
       setLastRun(run);
@@ -240,9 +302,6 @@ function App() {
         <div>
           <div className="titleRow">
             <h1>Global News Dashboard</h1>
-            <a className="exportLink" href="/api/articles/export.json" target="_blank" rel="noreferrer">
-              Download JSON
-            </a>
           </div>
           <p className="subtitle">
             Google News RSS scraper with URL dedupe in MongoDB. Quick run uses “yesterday” only; pick dates below to fetch a range from Google.
@@ -269,63 +328,80 @@ function App() {
       </header>
 
       <section className="filters">
-        <div className="field">
-          <label>Search title</label>
-          <input
-            value={q}
-            onChange={(e) => {
-              setQ(e.target.value);
-              resetToFirstPage();
-            }}
-            placeholder="e.g. Sadhguru"
-          />
-        </div>
-
-        <div className="field">
-          <label>Locale</label>
-          <input
-            value={locale}
-            onChange={(e) => {
-              setLocale(e.target.value);
-              resetToFirstPage();
-            }}
-            placeholder="e.g. English (India)"
-          />
-        </div>
-
-        <div className="field">
-          <label>Source</label>
-          <input
-            value={source}
-            onChange={(e) => {
-              setSource(e.target.value);
-              resetToFirstPage();
-            }}
-            placeholder="e.g. The Hindu"
-          />
-        </div>
-
-        <div className="field fieldSpan2">
-          <label>Date range (pubDate): filter DB or fetch from Google</label>
-          <div className="dateRow">
+        <div className="filtersTop">
+          <div className="field">
+            <label>Search title</label>
             <input
-              type="datetime-local"
-              value={fromDraft}
-              onChange={(e) => setFromDraft(e.target.value)}
-              aria-label="From date"
-            />
-            <span className="dateSep">→</span>
-            <input
-              type="datetime-local"
-              value={toDraft}
-              onChange={(e) => setToDraft(e.target.value)}
-              aria-label="To date"
+              value={q}
+              onChange={(e) => {
+                setQ(e.target.value);
+                resetToFirstPage();
+              }}
+              placeholder="e.g. Sadhguru"
             />
           </div>
+
+          <div className="field">
+            <label>Locale</label>
+            <input
+              value={locale}
+              onChange={(e) => {
+                setLocale(e.target.value);
+                resetToFirstPage();
+              }}
+              placeholder="e.g. English (India)"
+            />
+          </div>
+
+          <div className="field">
+            <label>Source</label>
+            <input
+              value={source}
+              onChange={(e) => {
+                setSource(e.target.value);
+                resetToFirstPage();
+              }}
+              placeholder="e.g. The Hindu"
+            />
+          </div>
+        </div>
+
+        <div className="field">
+          <label>Published date range (calendar days)</label>
+          <div className="dateRow">
+            <div
+              className="datePickerShell"
+              onClick={() => tryOpenDatePicker(fromDateRef.current)}
+              role="presentation"
+            >
+              <input
+                ref={fromDateRef}
+                type="date"
+                value={fromDraft}
+                onChange={(e) => setFromDraft(e.target.value)}
+                aria-label="From date"
+              />
+            </div>
+            <span className="dateSep">→</span>
+            <div
+              className="datePickerShell"
+              onClick={() => tryOpenDatePicker(toDateRef.current)}
+              role="presentation"
+            >
+              <input
+                ref={toDateRef}
+                type="date"
+                value={toDraft}
+                onChange={(e) => setToDraft(e.target.value)}
+                aria-label="To date"
+              />
+            </div>
+          </div>
           <p className="fieldHint">
-            <strong>Filter stored articles</strong> — query Mongo only. <strong>Fetch from Google</strong> — starts the
-            scraper in the background and polls status (large ranges can take many minutes). <code>To</code> is
-            exclusive. RSS lookback is limited (tiers up to <code>when:1y</code>).
+            <strong>Filter stored articles</strong> — query Mongo only. <strong>Fetch from Google</strong> — background
+            job with status polling (large ranges can take many minutes). The <strong>To</strong> day is included; the
+            API uses midnight after that day as the exclusive end. RSS lookback is limited (tiers up to{" "}
+            <code>when:1y</code>).
           </p>
           <div className="dateActions">
             <button type="button" className="secondary" onClick={applyDateFilter}>
@@ -345,7 +421,7 @@ function App() {
           </div>
         </div>
 
-        <div className="field">
+        <div className="field fieldRowsLimit">
           <label>Rows</label>
           <select
             value={limit}
@@ -401,7 +477,20 @@ function App() {
                 <td className="titleCell">{a.title}</td>
                 <td className="nowrap">{a.source || "Unknown"}</td>
                 <td className="nowrap">{a.locale}</td>
-                <td className="nowrap">{formatDate(a.pubDate || a.pubDateText)}</td>
+                <td className="pubDateCell">
+                  {formatDate(a.pubDate || a.pubDateText) ? (
+                    <>
+                      <div className="pubDateFriendly">
+                        {formatDateMonthDay(a.pubDate || a.pubDateText)}
+                      </div>
+                      <div className="pubDateDetail">
+                        {formatDate(a.pubDate || a.pubDateText)}
+                      </div>
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </td>
                 <td className="urlCell">
                   <a href={a.url} target="_blank" rel="noreferrer">
                     Open

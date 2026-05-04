@@ -18,7 +18,6 @@ export default defineConfig({
       name: "remind-api-server",
       configureServer(server) {
         server.httpServer?.once("listening", () => {
-          // eslint-disable-next-line no-console
           console.log(
             "\n  Note: /api is proxied to http://localhost:5000. Start the API (e.g. `npm run dev` in ../server) or run both from repo root: `npm run dev`.\n",
           );
