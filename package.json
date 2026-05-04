@@ -1,5 +1,5 @@
 {
-  "name": "web-crawler-mern-app",
+  "name": "sarpa-crawler",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -12,7 +12,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Sarpa Crawler — Google News RSS scraper with MongoDB",
   "devDependencies": {
     "concurrently": "^9.2.1"
   }

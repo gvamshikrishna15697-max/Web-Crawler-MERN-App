@@ -301,7 +301,7 @@ function App() {
       <header className="header">
         <div>
           <div className="titleRow">
-            <h1>Global News Dashboard</h1>
+            <h1>Sarpa Crawler</h1>
           </div>
           <p className="subtitle">
             Google News RSS scraper with URL dedupe in MongoDB. Quick run uses “yesterday” only; pick dates below to fetch a range from Google.
