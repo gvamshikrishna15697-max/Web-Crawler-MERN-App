@@ -20,12 +20,23 @@ async function apiFetch(url, init) {
 }
 
 async function fetchJson(url, init) {
-  const res = await apiFetch(url, init);
-  if (!res.ok) {
+  const maxRetries = 4;
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const res = await apiFetch(url, init);
+    if (res.ok) {
+      return res.json();
+    }
     const text = await res.text().catch(() => "");
+    const isDbBootWindow =
+      res.status === 503 &&
+      /DatabaseUnavailable|MongoDB is not connected yet/i.test(text || "");
+    if (isDbBootWindow && attempt < maxRetries) {
+      await sleep(700 * (attempt + 1));
+      continue;
+    }
     throw new Error(`HTTP ${res.status} ${res.statusText}${text ? ` — ${text}` : ""}`);
   }
-  return res.json();
+  throw new Error("API retry budget exhausted");
 }
 
 function sleep(ms) {

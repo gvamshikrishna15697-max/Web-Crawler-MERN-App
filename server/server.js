@@ -62,6 +62,14 @@ function mongoTlsOptions({ insecureFromUri = false } = {}) {
   };
 }
 
+/** Prefer IPv4 for SRV → Atlas; flaky IPv6 routes often surface as TLS alert internal error. Set MONGO_DNS_FAMILY=dual to use OS default. */
+function mongoFamilyOption() {
+  const v = (process.env.MONGO_DNS_FAMILY || "4").toLowerCase();
+  if (v === "0" || v === "dual" || v === "any") return {};
+  if (v === "6") return { family: 6 };
+  return { family: 4 };
+}
+
 async function connectWithRetry(rawMongoUri, { attempts = 12 } = {}) {
   const { uri: mongoUri, insecureFromUri } = normalizeMongoUri(rawMongoUri);
   let lastErr;
@@ -70,6 +78,7 @@ async function connectWithRetry(rawMongoUri, { attempts = 12 } = {}) {
     try {
       await mongoose.connect(mongoUri, {
         ...mongoTlsOptions({ insecureFromUri }),
+        ...mongoFamilyOption(),
         serverSelectionTimeoutMS: 45_000,
         connectTimeoutMS: 45_000,
         socketTimeoutMS: 120_000,
@@ -97,7 +106,7 @@ async function connectWithRetry(rawMongoUri, { attempts = 12 } = {}) {
 
   // eslint-disable-next-line no-console
   console.error(
-    "MongoDB could not connect. If you see ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR, try MONGO_TLS_INSECURE=true in server/.env (dev only). Keep tlsInsecure out of the URI — this app applies TLS options in code.",
+    "MongoDB could not connect. If you see ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR: use MONGO_TLS_INSECURE=true (dev only), ensure Atlas Network Access allows your IP, and try IPv4 (default) or MONGO_DNS_FAMILY=dual. Keep tlsInsecure out of the URI — TLS options are applied in code.",
   );
   throw lastErr;
 }
@@ -111,7 +120,7 @@ function requireMongo(_req, res, next) {
   res.status(503).json({
     error: "DatabaseUnavailable",
     message:
-      "MongoDB is not connected yet. Check the server terminal (TLS / MONGO_URI / Atlas IP allowlist). For local dev TLS issues, set MONGO_TLS_INSECURE=true in server/.env.",
+      "MongoDB is not connected yet. Check the server terminal (TLS / MONGO_URI / Atlas IP allowlist). For local dev TLS issues, set MONGO_TLS_INSECURE=true in server/.env. If you see TLS alert internal errors, try IPv4 only (default) or set MONGO_DNS_FAMILY=dual.",
   });
 }
 
@@ -159,7 +168,13 @@ async function maintainMongoConnection() {
       // eslint-disable-next-line no-console
       console.log("MongoDB connected");
       startScheduler();
-      return;
+      // Stay on the cluster until the driver reports disconnect, then reconnect (was: return after first connect → permanent 503 after pool/TLS drops).
+      await new Promise((resolve) => {
+        mongoose.connection.once("disconnected", resolve);
+      });
+      // eslint-disable-next-line no-console
+      console.warn("MongoDB disconnected — reconnecting…");
+      await sleep(2000);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(err?.message || err);
