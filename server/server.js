@@ -51,12 +51,14 @@ function mongoTlsOptions({ insecureFromUri = false } = {}) {
   if (insecure) {
     // eslint-disable-next-line no-console
     console.warn(
-      "WARNING: Insecure Mongo TLS (tlsInsecure removed from URI and applied as tlsAllowInvalidCertificates). Dev/troubleshooting only — do not use in production.",
+      "WARNING: Relaxed Mongo TLS (dev/troubleshooting only). Remove MONGO_TLS_INSECURE and fix the real cert/URI issue before production.",
     );
   }
   return {
     tls: true,
     tlsAllowInvalidCertificates: insecure,
+    // Some Atlas / local-proxy setups raise TLS alert internal error until hostname verification is relaxed.
+    ...(insecure ? { tlsAllowInvalidHostnames: true } : {}),
   };
 }
 
@@ -95,9 +97,22 @@ async function connectWithRetry(rawMongoUri, { attempts = 12 } = {}) {
 
   // eslint-disable-next-line no-console
   console.error(
-    "MongoDB could not connect. If TLS errors persist, keep tlsInsecure out of the URI (this app strips it) and use MONGO_TLS_INSECURE=true in server/.env for local dev only.",
+    "MongoDB could not connect. If you see ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR, try MONGO_TLS_INSECURE=true in server/.env (dev only). Keep tlsInsecure out of the URI — this app applies TLS options in code.",
   );
   throw lastErr;
+}
+
+/** API routes need DB; avoid Vite ECONNREFUSED while Mongo is still connecting (or retrying after TLS errors). */
+function requireMongo(_req, res, next) {
+  if (mongoose.connection.readyState === 1) {
+    next();
+    return;
+  }
+  res.status(503).json({
+    error: "DatabaseUnavailable",
+    message:
+      "MongoDB is not connected yet. Check the server terminal (TLS / MONGO_URI / Atlas IP allowlist). For local dev TLS issues, set MONGO_TLS_INSECURE=true in server/.env.",
+  });
 }
 
 app.use(helmet());
@@ -117,9 +132,15 @@ app.use(
   }),
 );
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
-app.use("/api/articles", articlesRouter);
-app.use("/api/scrape", scrapeRouter);
+app.get("/health", (_req, res) =>
+  res.json({
+    ok: true,
+    mongo:
+      mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+  }),
+);
+app.use("/api/articles", requireMongo, articlesRouter);
+app.use("/api/scrape", requireMongo, scrapeRouter);
 
 app.use((err, _req, res, _next) => {
   // eslint-disable-next-line no-console
@@ -129,21 +150,37 @@ app.use((err, _req, res, _next) => {
 
 const port = Number(process.env.PORT || 5000);
 
+async function maintainMongoConnection() {
+  const uri = process.env.MONGO_URI;
+  if (!uri) return;
+  for (;;) {
+    try {
+      await connectWithRetry(uri);
+      // eslint-disable-next-line no-console
+      console.log("MongoDB connected");
+      startScheduler();
+      return;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(err?.message || err);
+      // eslint-disable-next-line no-console
+      console.error("Mongo reconnect cycle in 30s...");
+      await sleep(30_000);
+    }
+  }
+}
+
 async function main() {
   if (!process.env.MONGO_URI) {
     throw new Error("Missing MONGO_URI in environment");
   }
 
-  await connectWithRetry(process.env.MONGO_URI);
-  // eslint-disable-next-line no-console
-  console.log("MongoDB connected");
-
-  startScheduler();
-
   const twentyMin = 20 * 60 * 1000;
   const server = app.listen(port, () => {
     // eslint-disable-next-line no-console
-    console.log(`Server listening on http://localhost:${port}`);
+    console.log(
+      `Server listening on http://localhost:${port} (MongoDB connecting in background…)`,
+    );
   });
   // Long range scrapes (many locales × RSS) — relax timeouts vs defaults that can cut connections early.
   server.timeout = twentyMin;
@@ -151,6 +188,8 @@ async function main() {
   if (typeof server.requestTimeout === "number") {
     server.requestTimeout = twentyMin;
   }
+
+  void maintainMongoConnection();
 }
 
 main().catch((err) => {

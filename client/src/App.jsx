@@ -51,7 +51,11 @@ async function postScrapeJob(body) {
   return data.jobId;
 }
 
-async function pollScrapeJob(jobId, { timeoutMs = 30 * 60 * 1000 } = {}) {
+const POLL_IDLE_MS = 30 * 60 * 1000;
+/** Wide ranges hit every locale’s RSS in sequence — often well over 30 minutes. */
+const POLL_RANGE_MS = 6 * 60 * 60 * 1000;
+
+async function pollScrapeJob(jobId, { timeoutMs = POLL_IDLE_MS } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const st = await fetchJson(`/api/scrape/job/${jobId}`);
@@ -61,8 +65,9 @@ async function pollScrapeJob(jobId, { timeoutMs = 30 * 60 * 1000 } = {}) {
     }
     await sleep(1600);
   }
+  const mins = Math.round(timeoutMs / 60_000);
   throw new Error(
-    "Timed out waiting for the scraper. It may still be running — open /api/scrape/last or refresh the dashboard.",
+    `Timed out after ${mins}m waiting for this scrape. Large ranges (many locales × RSS) can take hours; the job may still be running on the server — try GET /api/scrape/last or refresh later.`,
   );
 }
 
@@ -281,7 +286,7 @@ function App() {
       const fromIso = localDayStartIso(fromDraft);
       const toIso = localDayAfterEndIso(toDraft);
       const jobId = await postScrapeJob({ from: fromIso, to: toIso });
-      const run = await pollScrapeJob(jobId);
+      const run = await pollScrapeJob(jobId, { timeoutMs: POLL_RANGE_MS });
       setLastRun(run);
       setFromApplied(fromDraft);
       setToApplied(toDraft);
@@ -312,7 +317,9 @@ function App() {
           <div className="runMeta">
             <div className="runLabel">Last run</div>
             <div className="runValue">
-              {lastRun?.finishedAt ? formatDate(lastRun.finishedAt) : "—"}
+              {lastRun?.finishedAt
+                ? `${formatDateMonthDay(lastRun.finishedAt)} • ${formatDate(lastRun.finishedAt)}`
+                : "—"}
             </div>
             <div className={`pill ${lastRun?.status === "success" ? "ok" : "warn"}`}>
               {lastRun?.status || "unknown"}
