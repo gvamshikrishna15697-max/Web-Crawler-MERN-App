@@ -283,7 +283,15 @@ function App() {
         page,
         limit,
       }),
-    [q, locale, source, fromApplied, toApplied, page, limit],
+    [
+      q,
+      locale,
+      source,
+      fromApplied,
+      toApplied,
+      page,
+      limit,
+    ],
   );
 
   async function load(overrides = {}) {
@@ -673,7 +681,19 @@ function App() {
             {items.map((a) => (
               <tr key={a._id || a.url}>
                 <td className="titleCell">{a.title}</td>
-                <td className="nowrap">{a.source || "Unknown"}</td>
+                <td className="publisherCell">
+                  <div className="publisherName">{a.source || "Unknown"}</div>
+                  {a.category || a.country ? (
+                    <div className="publisherMeta">
+                      {a.category ? (
+                        <span className="metaBadge">{a.category}</span>
+                      ) : null}
+                      {a.country ? (
+                        <span className="metaBadge metaBadgeCountry">{a.country}</span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </td>
                 <td className="nowrap">{a.locale}</td>
                 <td className="pubDateCell">
                   {formatDate(a.pubDate || a.pubDateText) ? (

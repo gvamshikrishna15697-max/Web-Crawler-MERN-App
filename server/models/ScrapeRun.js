@@ -9,9 +9,13 @@ const scrapeRunSchema = new mongoose.Schema(
     stats: { type: Object, default: {} },
     snapshot: { type: Object, default: {} },
     error: { type: String, default: "" },
+    /** HTTP poll id from POST /api/scrape/run — used to recover status after restart. */
+    jobId: { type: String },
   },
   { timestamps: true },
 );
+
+scrapeRunSchema.index({ jobId: 1 }, { unique: true, sparse: true });
 
 export default mongoose.model("ScrapeRun", scrapeRunSchema);
 

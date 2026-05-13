@@ -4,6 +4,10 @@ import { XMLParser } from "fast-xml-parser";
 import Article from "../models/Article.js";
 import { locales } from "../config/locales.js";
 import { blockedPublishers } from "../config/blockedPublishers.js";
+import {
+  findPublication,
+  normalizePublisherName,
+} from "../config/publications.js";
 
 const MS_PER_DAY = 86400000;
 
@@ -120,8 +124,11 @@ export async function runGlobalScraper({
     fetchedItems: 0,
     acceptedItems: 0,
     upserted: 0,
+    enriched: 0,
     skippedLocales: [],
+    unknownPublishers: [],
   };
+  const unknownPublishersSet = new Set();
 
   if (rangeMode) {
     stats.rangeFrom = rf.toISOString();
@@ -162,6 +169,14 @@ export async function runGlobalScraper({
         const link = item?.link ? String(item.link) : "";
         if (!title || !link) continue;
 
+        const pubMatch = findPublication(sourceText);
+        const publisherKey = normalizePublisherName(sourceText);
+        if (pubMatch) {
+          stats.enriched += 1;
+        } else if (sourceText) {
+          unknownPublishersSet.add(sourceText);
+        }
+
         stats.acceptedItems += 1;
         ops.push({
           updateOne: {
@@ -174,6 +189,12 @@ export async function runGlobalScraper({
                 url: link,
                 pubDate: articleDate,
                 pubDateText,
+              },
+              $set: {
+                publisherKey,
+                country: pubMatch?.country || "",
+                language: pubMatch?.language || "",
+                category: pubMatch?.category || "",
               },
             },
             upsert: true,
@@ -193,6 +214,9 @@ export async function runGlobalScraper({
     }
   }
 
+  // Limit the sample so this never bloats ScrapeRun.stats stored in Mongo.
+  stats.unknownPublishers = [...unknownPublishersSet].sort().slice(0, 100);
+  stats.unknownPublishersTotal = unknownPublishersSet.size;
   stats.finishedAt = new Date().toISOString();
   return stats;
 }

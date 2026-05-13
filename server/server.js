@@ -13,6 +13,7 @@ import mongoose from "mongoose";
 
 import articlesRouter from "./routes/articles.js";
 import scrapeRouter from "./routes/scrape.js";
+import publicationsRouter from "./routes/publications.js";
 import { startScheduler } from "./jobs/scheduler.js";
 
 const app = express();
@@ -148,6 +149,8 @@ app.get("/health", (_req, res) =>
       mongoose.connection.readyState === 1 ? "connected" : "disconnected",
   }),
 );
+// Publications data is a static dataset — no DB required, useful while Mongo reconnects.
+app.use("/api/publications", publicationsRouter);
 app.use("/api/articles", requireMongo, articlesRouter);
 app.use("/api/scrape", requireMongo, scrapeRouter);
 

@@ -1,0 +1,63 @@
+{
+  "project": "Sarpa Crawler (Web Crawler MERN App)",
+  "stack": {
+    "frontend": "React + Vite (client/)",
+    "backend": "Express + Mongoose (server/)",
+    "db": "MongoDB Atlas"
+  },
+  "dev_ports": {
+    "client": 5173,
+    "server": 5000
+  },
+  "run_commands": {
+    "root_dev": "npm run dev",
+    "server_dev": "cd server && npm run dev",
+    "client_dev": "cd client && npm run dev"
+  },
+  "core_behavior": [
+    "Scrapes Google News RSS per locale (server/config/locales.js).",
+    "Manual scrapes are asynchronous: POST /api/scrape/run returns 202 + jobId; UI polls GET /api/scrape/job/:jobId.",
+    "Mongo may take time to connect; server binds to port 5000 immediately and returns 503 for /api/* until Mongo is ready."
+  ],
+  "data_model": {
+    "articles": "server/models/Article.js (url unique; pubDate; source; locale; plus publisher enrichment fields category/country/language/publisherKey).",
+    "scrape_runs": "server/models/ScrapeRun.js (success/error; stats; snapshot; jobId for poll recovery)."
+  },
+  "search_and_performance": {
+    "mongodb_indexes": [
+      "Always add indexes for any new filter fields (esp. for 10k+ articles).",
+      "Prefer compound indexes that match query shapes (e.g., {category: 1, pubDate: -1})."
+    ],
+    "query_rules": [
+      "Avoid unbounded regex. If using regex from user input, escape it first.",
+      "Keep API pagination server-side (page/limit) and never return huge result sets by default."
+    ],
+    "frontend_rules": [
+      "Debounce free-text inputs that trigger fetches (Search title, Locale, Source) if they cause excessive requests.",
+      "Prefer dropdowns backed by server-provided metadata for high-cardinality fields."
+    ]
+  },
+  "scrape_job_rules": [
+    "Long scrapes must not block HTTP. Use background job + polling pattern.",
+    "Persist job snapshots to disk to survive restarts and avoid 'UnknownOrExpiredJob'.",
+    "Nodemon must ignore server/data/**/* to prevent restarts on snapshot writes."
+  ],
+  "publications_dataset": {
+    "path": "global_publications_dataset.json",
+    "usage": [
+      "Use server/config/publications.js to enrich Article.country/language/category.",
+      "Ignore padded placeholder entries ending in 'Vol.N'.",
+      "Expose /api/publications/meta for UI dropdowns."
+    ]
+  },
+  "ui_conventions": {
+    "theme": "Supports light/dark via <html data-theme='light|dark'> with CSS variables in client/src/index.css.",
+    "date_inputs": "Use type='date' only; treat To as inclusive day in UI but convert to exclusive end (midnight next day) for API."
+  },
+  "safety": [
+    "Never commit secrets (server/.env, credentials).",
+    "If a user pastes credentials (like Mongo password), recommend rotating them.",
+    "Avoid destructive git commands unless explicitly requested."
+  ]
+}
+
