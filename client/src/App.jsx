@@ -82,6 +82,143 @@ async function pollScrapeJob(jobId, { timeoutMs = POLL_IDLE_MS } = {}) {
   );
 }
 
+/* ──────────────────────────── Export helpers ──────────────────────────── */
+
+function escCsv(v) {
+  const s = String(v ?? "");
+  return s.includes(",") || s.includes('"') || s.includes("\n")
+    ? `"${s.replace(/"/g, '""')}"`
+    : s;
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+    a.remove();
+  }, 100);
+}
+
+function exportFileName(ext) {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  return `sarpa-articles-${ts}.${ext}`;
+}
+
+function articleRows(articles) {
+  return articles.map((a) => ({
+    title: a.title || "",
+    source: a.source || "Unknown",
+    locale: a.locale || "",
+    pubDate: a.pubDate || a.pubDateText || "",
+    url: a.url || "",
+  }));
+}
+
+function fmtDateForExport(raw) {
+  if (!raw) return "";
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString();
+}
+
+function exportCsv(articles) {
+  const rows = articleRows(articles);
+  const header = "Title,Publisher,Locale,Date Published,URL";
+  const lines = rows.map((r) =>
+    [r.title, r.source, r.locale, fmtDateForExport(r.pubDate), r.url]
+      .map(escCsv)
+      .join(","),
+  );
+  const csv = [header, ...lines].join("\r\n");
+  downloadBlob(
+    new Blob([csv], { type: "text/csv;charset=utf-8" }),
+    exportFileName("csv"),
+  );
+}
+
+function buildExportTable(articles) {
+  const rows = articleRows(articles);
+  const esc = (s) =>
+    String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  let html = `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;width:100%">
+<thead><tr style="background:#4f46e5;color:#fff">
+  <th style="text-align:left">Title</th>
+  <th style="text-align:left">Publisher</th>
+  <th style="text-align:left">Locale</th>
+  <th style="text-align:left">Date Published</th>
+  <th style="text-align:left">URL</th>
+</tr></thead><tbody>`;
+  for (const r of rows) {
+    html += `<tr>
+  <td>${esc(r.title)}</td>
+  <td>${esc(r.source)}</td>
+  <td>${esc(r.locale)}</td>
+  <td>${esc(fmtDateForExport(r.pubDate))}</td>
+  <td><a href="${esc(r.url)}">${esc(r.url)}</a></td>
+</tr>`;
+  }
+  html += "</tbody></table>";
+  return html;
+}
+
+function exportPdf(articles) {
+  const table = buildExportTable(articles);
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Sarpa Crawler - Articles Export</title>
+<style>
+  @page { size: landscape; margin: 12mm; }
+  body { margin: 0; font-family: Arial, sans-serif; }
+  h2 { margin: 0 0 12px; font-size: 18px; }
+  .meta { font-size: 12px; color: #666; margin-bottom: 14px; }
+  table { page-break-inside: auto; }
+  tr { page-break-inside: avoid; }
+  td, th { word-break: break-word; }
+  td:last-child { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+</style></head><body>
+<h2>Sarpa Crawler &mdash; Articles Export</h2>
+<p class="meta">${articles.length} articles &bull; Generated ${new Date().toLocaleString()}</p>
+${table}
+<script>window.onload=function(){window.print()}<\/script>
+</body></html>`;
+  const w = window.open("", "_blank");
+  if (w) {
+    w.document.write(html);
+    w.document.close();
+  }
+}
+
+function exportDocx(articles) {
+  const table = buildExportTable(articles);
+  const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office"
+xmlns:w="urn:schemas-microsoft-com:office:word"
+xmlns="http://www.w3.org/TR/REC-html40">
+<head><meta charset="utf-8">
+<style>
+  body { font-family: Arial, sans-serif; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #ccc; padding: 6px 8px; font-size: 12px; }
+  th { background: #4f46e5; color: #fff; }
+  td:last-child { max-width: 200px; word-break: break-all; }
+</style></head><body>
+<h2>Sarpa Crawler &mdash; Articles Export</h2>
+<p style="font-size:12px;color:#666">${articles.length} articles &bull; Generated ${new Date().toLocaleString()}</p>
+${table}
+</body></html>`;
+  downloadBlob(
+    new Blob([html], { type: "application/msword" }),
+    exportFileName("doc"),
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────── */
+
 /** Open native date UI from a user gesture (whole bar, not only the typed segment). */
 function tryOpenDatePicker(input) {
   if (!input) return;
@@ -403,6 +540,39 @@ function App() {
     }
   }
 
+  const [exporting, setExporting] = useState(false);
+
+  async function fetchAllForExport() {
+    const qs = buildArticleQuery({
+      q,
+      locale,
+      source,
+      fromApplied,
+      toApplied,
+      page: 1,
+      limit: 5000,
+    });
+    const data = await fetchJson(`/api/articles?${qs}`);
+    return data.items || [];
+  }
+
+  async function handleExport(exportFn) {
+    setExporting(true);
+    setError("");
+    try {
+      const all = await fetchAllForExport();
+      if (all.length === 0) {
+        setError("No articles to export for the current filters.");
+        return;
+      }
+      exportFn(all);
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const pagePillItems = useMemo(
     () => buildPagePillItems({ page, totalPages }),
@@ -664,6 +834,39 @@ function App() {
               : total > 0
                 ? `Showing ${pageStart.toLocaleString()}–${pageEnd.toLocaleString()} of ${total.toLocaleString()} results`
                 : "0 results"}
+          </div>
+          <div className="exportBar">
+            <button
+              type="button"
+              className="exportBtn"
+              disabled={exporting || loading || total === 0}
+              onClick={() => handleExport(exportCsv)}
+              title="Download as CSV (opens in Google Sheets / Excel)"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              CSV / Sheets
+            </button>
+            <button
+              type="button"
+              className="exportBtn"
+              disabled={exporting || loading || total === 0}
+              onClick={() => handleExport(exportPdf)}
+              title="Open print-friendly view (Save as PDF)"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+              PDF
+            </button>
+            <button
+              type="button"
+              className="exportBtn"
+              disabled={exporting || loading || total === 0}
+              onClick={() => handleExport(exportDocx)}
+              title="Download as Word document (.doc)"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+              Word
+            </button>
+            {exporting && <span className="muted">Exporting…</span>}
           </div>
         </div>
 

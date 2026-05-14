@@ -33,7 +33,7 @@ router.get("/", async (req, res, next) => {
     } = req.query;
 
     const pageNum = Math.max(1, Number(page) || 1);
-    const limitNum = Math.min(200, Math.max(1, Number(limit) || 50));
+    const limitNum = Math.min(5000, Math.max(1, Number(limit) || 50));
 
     const filter = {};
     if (from || to) {
