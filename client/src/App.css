@@ -363,7 +363,8 @@
   border-radius: 14px;
   background: var(--bg-card);
   box-shadow: var(--shadow-sm);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 .tableHeader {
@@ -424,6 +425,130 @@
   background: rgba(34, 154, 72, 0.10);
   border-color: rgba(34, 154, 72, 0.55);
   box-shadow: 0 1px 4px rgba(34, 154, 72, 0.12);
+}
+
+.selectionBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.selectionCount {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--link);
+}
+
+.selectionActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.selectionPdfBtn {
+  border-color: rgba(99, 102, 241, 0.45);
+}
+
+.selectionClearBtn {
+  padding: 6px 12px;
+  font-size: 0.82rem;
+}
+
+.colSelect {
+  width: 3.25rem;
+  min-width: 3.25rem;
+  max-width: 3.25rem;
+  text-align: center;
+  vertical-align: middle;
+  padding: 12px 10px !important;
+  background: var(--bg-soft);
+}
+
+.table th.colSelect {
+  font-size: 0.8rem;
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.colSelectLabel {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  line-height: 1;
+}
+
+.table tbody td.colSelect {
+  background: var(--bg-card);
+}
+
+.table tbody tr.rowSelected td.colSelect {
+  background: rgba(99, 102, 241, 0.12);
+}
+
+.exportBtnPdfActive {
+  border-color: rgba(99, 102, 241, 0.55);
+  background: rgba(99, 102, 241, 0.14);
+  color: var(--link);
+}
+
+.colActions {
+  width: 3.25rem;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.rowCheckbox {
+  width: 1.15rem;
+  height: 1.15rem;
+  min-width: 1.15rem;
+  min-height: 1.15rem;
+  cursor: pointer;
+  accent-color: var(--primary);
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.colSelect .rowCheckbox {
+  display: block;
+  margin: 0 auto;
+}
+
+.table tbody tr.rowSelected {
+  background: rgba(99, 102, 241, 0.07);
+}
+
+.table tbody tr.rowSelected:hover {
+  background: rgba(99, 102, 241, 0.11);
+}
+
+.rowPdfBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.rowPdfBtn:hover {
+  color: var(--primary);
+  border-color: rgba(99, 102, 241, 0.45);
+  background: rgba(99, 102, 241, 0.1);
 }
 
 .table {

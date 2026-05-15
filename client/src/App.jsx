@@ -219,6 +219,92 @@ ${table}
   }
 }
 
+function articleKey(a) {
+  return String(a._id || a.url || "");
+}
+
+function buildArticleDetailCards(articles) {
+  const esc = (s) =>
+    String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  return articles
+    .map((a, i) => {
+      const title = a.title || "Untitled";
+      const source = a.source || "Unknown";
+      const locale = a.locale || "—";
+      const date = fmtDateForExport(a.pubDate || a.pubDateText) || "—";
+      const url = a.url || "";
+      const meta = [a.category, a.country].filter(Boolean).join(" · ");
+      return `<article class="card">
+  <div class="card-num">${i + 1}</div>
+  <h3 class="card-title">${esc(title)}</h3>
+  <dl class="card-meta">
+    <div><dt>Publisher</dt><dd>${esc(source)}</dd></div>
+    <div><dt>Locale</dt><dd>${esc(locale)}</dd></div>
+    <div><dt>Published</dt><dd>${esc(date)}</dd></div>
+    ${meta ? `<div><dt>Tags</dt><dd>${esc(meta)}</dd></div>` : ""}
+    ${url ? `<div class="full"><dt>Link</dt><dd><a href="${esc(url)}">${esc(url)}</a></dd></div>` : ""}
+  </dl>
+</article>`;
+    })
+    .join("\n");
+}
+
+function buildSingleArticlePrintHtml(articles) {
+  const cards = buildArticleDetailCards(articles);
+  const label =
+    articles.length === 1 ? "Article" : `${articles.length} articles`;
+  return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Sarpa Crawler — ${label}</title>
+<style>
+  @page { margin: 14mm; }
+  body { margin: 0; font-family: Georgia, "Times New Roman", serif; color: #111; line-height: 1.45; }
+  .header { font-family: Arial, sans-serif; border-bottom: 2px solid #4f46e5; padding-bottom: 10px; margin-bottom: 20px; }
+  .header h1 { margin: 0; font-size: 20px; color: #4f46e5; }
+  .header p { margin: 6px 0 0; font-size: 12px; color: #555; }
+  .card { page-break-inside: avoid; border: 1px solid #ddd; border-radius: 8px; padding: 16px 18px; margin-bottom: 18px; background: #fafafa; }
+  .card-num { font-family: Arial, sans-serif; font-size: 11px; font-weight: 700; color: #4f46e5; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+  .card-title { margin: 0 0 12px; font-size: 17px; line-height: 1.35; }
+  .card-meta { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px; font-family: Arial, sans-serif; font-size: 12px; }
+  .card-meta dt { margin: 0; font-weight: 600; color: #444; }
+  .card-meta dd { margin: 2px 0 0; color: #111; }
+  .card-meta .full { grid-column: 1 / -1; }
+  .card-meta a { color: #4338ca; word-break: break-all; }
+</style></head><body>
+<div class="header">
+  <h1>Sarpa Crawler</h1>
+  <p>${label} &bull; Generated ${new Date().toLocaleString()}</p>
+</div>
+${cards}
+<script>window.onload=function(){window.print()}<\/script>
+</body></html>`;
+}
+
+/** Open one print tab (Save as PDF in the browser print dialog). */
+function exportArticlesPdf(articles) {
+  if (!articles.length) return;
+  const html = buildSingleArticlePrintHtml(articles);
+  const w = window.open("", "_blank");
+  if (w) {
+    w.document.write(html);
+    w.document.close();
+  }
+}
+
+/** One print tab per article — use after selecting rows and clicking PDF. */
+function exportArticlesPdfIndividually(articles) {
+  if (!articles.length) return;
+  const gapMs = 700;
+  articles.forEach((article, index) => {
+    setTimeout(() => {
+      exportArticlesPdf([article]);
+    }, index * gapMs);
+  });
+}
+
 function exportDocx(articles) {
   const table = buildExportTable(articles);
   const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office"
@@ -566,6 +652,79 @@ function App() {
   }
 
   const [exporting, setExporting] = useState(false);
+  /** id/url → article; persists across pages for multi-select export */
+  const [selectedArticles, setSelectedArticles] = useState({});
+
+  const selectedList = useMemo(
+    () => Object.values(selectedArticles),
+    [selectedArticles],
+  );
+  const selectedCount = selectedList.length;
+
+  const pageKeys = useMemo(
+    () => items.map((a) => articleKey(a)).filter(Boolean),
+    [items],
+  );
+  const allPageSelected =
+    pageKeys.length > 0 && pageKeys.every((k) => selectedArticles[k]);
+  const somePageSelected =
+    pageKeys.some((k) => selectedArticles[k]) && !allPageSelected;
+
+  function toggleArticleSelection(article) {
+    const key = articleKey(article);
+    if (!key) return;
+    setSelectedArticles((prev) => {
+      const next = { ...prev };
+      if (next[key]) delete next[key];
+      else next[key] = article;
+      return next;
+    });
+  }
+
+  function toggleSelectAllOnPage() {
+    setSelectedArticles((prev) => {
+      const next = { ...prev };
+      if (allPageSelected) {
+        for (const k of pageKeys) delete next[k];
+      } else {
+        for (const a of items) {
+          const k = articleKey(a);
+          if (k) next[k] = a;
+        }
+      }
+      return next;
+    });
+  }
+
+  function clearArticleSelection() {
+    setSelectedArticles({});
+  }
+
+  function downloadSelectedArticlesPdf() {
+    if (selectedCount === 0) {
+      setError("Select one or more articles using the checkboxes, then click PDF.");
+      return;
+    }
+    setError(
+      selectedCount > 1
+        ? `Opening ${selectedCount} print tabs (one per article). Allow pop-ups, then use Save as PDF in each tab.`
+        : "",
+    );
+    exportArticlesPdfIndividually(selectedList);
+  }
+
+  function handlePdfToolbarClick() {
+    if (selectedCount > 0) {
+      downloadSelectedArticlesPdf();
+      return;
+    }
+    setError("Select articles with the checkboxes to the left of each title, then click PDF.");
+  }
+
+  function downloadOneArticlePdf(article) {
+    setError("");
+    exportArticlesPdf([article]);
+  }
 
   async function fetchAllForExport() {
     const qs = buildArticleQuery({
@@ -881,13 +1040,17 @@ function App() {
             </button>
             <button
               type="button"
-              className="exportBtn"
+              className={`exportBtn ${selectedCount > 0 ? "exportBtnPdfActive" : ""}`}
               disabled={exporting || loading || total === 0}
-              onClick={() => handleExport(exportPdf)}
-              title="Open print-friendly view (Save as PDF)"
+              onClick={handlePdfToolbarClick}
+              title={
+                selectedCount > 0
+                  ? `Download ${selectedCount} selected article(s) as separate PDFs (one tab each)`
+                  : "Select articles with checkboxes, then click to download each as PDF"
+              }
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-              PDF
+              PDF{selectedCount > 0 ? ` (${selectedCount})` : ""}
             </button>
             <button
               type="button"
@@ -903,19 +1066,68 @@ function App() {
           </div>
         </div>
 
+        {selectedCount > 0 ? (
+          <div className="selectionBar">
+            <span className="selectionCount">
+              {selectedCount} article{selectedCount === 1 ? "" : "s"} selected
+            </span>
+            <div className="selectionActions">
+              <button
+                type="button"
+                className="exportBtn selectionPdfBtn"
+                onClick={downloadSelectedArticlesPdf}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                Download each as PDF ({selectedCount})
+              </button>
+              <button type="button" className="ghost selectionClearBtn" onClick={clearArticleSelection}>
+                Clear selection
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         <table className="table">
           <thead>
             <tr>
-              <th>Title</th>
+              <th className="colSelect" scope="col" title="Select articles for PDF download">
+                <span className="colSelectLabel">Select</span>
+                <input
+                  type="checkbox"
+                  className="rowCheckbox"
+                  checked={allPageSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = somePageSelected;
+                  }}
+                  onChange={toggleSelectAllOnPage}
+                  disabled={loading || items.length === 0}
+                  aria-label="Select all articles on this page"
+                  title="Select all on this page"
+                />
+              </th>
+              <th scope="col">Title</th>
               <th>Publisher</th>
               <th>Locale</th>
               <th>Date Published</th>
               <th>URL</th>
+              <th className="colActions">PDF</th>
             </tr>
           </thead>
           <tbody>
-            {items.map((a) => (
-              <tr key={a._id || a.url}>
+            {items.map((a) => {
+              const key = articleKey(a);
+              const isSelected = Boolean(key && selectedArticles[key]);
+              return (
+              <tr key={key || a.url} className={isSelected ? "rowSelected" : ""}>
+                <td className="colSelect">
+                  <input
+                    type="checkbox"
+                    className="rowCheckbox"
+                    checked={isSelected}
+                    onChange={() => toggleArticleSelection(a)}
+                    aria-label={`Select article: ${a.title || "Untitled"}`}
+                  />
+                </td>
                 <td className="titleCell">{a.title}</td>
                 <td className="publisherCell">
                   <div className="publisherName">{a.source || "Unknown"}</div>
@@ -950,11 +1162,23 @@ function App() {
                     Open
                   </a>
                 </td>
+                <td className="colActions">
+                  <button
+                    type="button"
+                    className="rowPdfBtn"
+                    onClick={() => downloadOneArticlePdf(a)}
+                    title="Download this article as PDF"
+                    aria-label="Download PDF"
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                  </button>
+                </td>
               </tr>
-            ))}
+            );
+            })}
             {!loading && items.length === 0 ? (
               <tr>
-                <td colSpan={5} className="empty">
+                <td colSpan={7} className="empty">
                   No articles found for these filters.
                 </td>
               </tr>
