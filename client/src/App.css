@@ -358,6 +358,17 @@
   color: var(--error-text);
 }
 
+.notice {
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.1);
+  color: var(--pill-ok-text);
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+
 .tableWrap {
   border: 1px solid var(--border);
   border-radius: 14px;

@@ -193,9 +193,9 @@ ${table}
   );
 }
 
-function exportPdf(articles) {
+function buildTableExportPrintHtml(articles) {
   const table = buildExportTable(articles);
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+  return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>Sarpa Crawler - Articles Export</title>
 <style>
   @page { size: landscape; margin: 12mm; }
@@ -210,13 +210,49 @@ function exportPdf(articles) {
 <h2>Sarpa Crawler &mdash; Articles Export</h2>
 <p class="meta">${articles.length} articles &bull; Generated ${new Date().toLocaleString()}</p>
 ${table}
-<script>window.onload=function(){window.print()}<\/script>
 </body></html>`;
-  const w = window.open("", "_blank");
-  if (w) {
-    w.document.write(html);
-    w.document.close();
+}
+
+/** Print HTML without pop-ups (hidden iframe in the same page). */
+function printHtmlViaIframe(html) {
+  let iframe = document.getElementById("sarpa-print-frame");
+  if (!iframe) {
+    iframe = document.createElement("iframe");
+    iframe.id = "sarpa-print-frame";
+    iframe.setAttribute(
+      "style",
+      "position:fixed;left:0;top:0;width:0;height:0;border:0;visibility:hidden",
+    );
+    iframe.setAttribute("title", "Print frame");
+    document.body.appendChild(iframe);
   }
+  const win = iframe.contentWindow;
+  const doc = win.document;
+  doc.open();
+  doc.write(html);
+  doc.close();
+  const runPrint = () => {
+    try {
+      win.focus();
+      win.print();
+    } catch {
+      // ignore — file download still succeeded
+    }
+  };
+  if (doc.readyState === "complete") {
+    setTimeout(runPrint, 350);
+  } else {
+    iframe.onload = () => setTimeout(runPrint, 350);
+  }
+}
+
+function exportPdf(articles) {
+  const html = buildTableExportPrintHtml(articles);
+  downloadBlob(
+    new Blob([html], { type: "text/html;charset=utf-8" }),
+    exportFileName("html"),
+  );
+  printHtmlViaIframe(html);
 }
 
 function articleKey(a) {
@@ -279,30 +315,46 @@ function buildSingleArticlePrintHtml(articles) {
   <p>${label} &bull; Generated ${new Date().toLocaleString()}</p>
 </div>
 ${cards}
-<script>window.onload=function(){window.print()}<\/script>
 </body></html>`;
 }
 
-/** Open one print tab (Save as PDF in the browser print dialog). */
-function exportArticlesPdf(articles) {
-  if (!articles.length) return;
-  const html = buildSingleArticlePrintHtml(articles);
-  const w = window.open("", "_blank");
-  if (w) {
-    w.document.write(html);
-    w.document.close();
-  }
+function safeFilenameFromTitle(title, index) {
+  const slug =
+    String(title || "article")
+      .slice(0, 72)
+      .replace(/[^\w\s-]/g, "")
+      .trim()
+      .replace(/\s+/g, "-") || "article";
+  return index != null ? `sarpa-${slug}-${index + 1}` : `sarpa-${slug}`;
 }
 
-/** One print tab per article — use after selecting rows and clicking PDF. */
-function exportArticlesPdfIndividually(articles) {
-  if (!articles.length) return;
-  const gapMs = 700;
-  articles.forEach((article, index) => {
-    setTimeout(() => {
-      exportArticlesPdf([article]);
-    }, index * gapMs);
-  });
+const PDF_READY_NOTICE =
+  "HTML file downloaded. Use the print dialog → Save as PDF, or open the downloaded .html file and print from there.";
+
+/**
+ * Download printable HTML and open the system print dialog (no pop-up window).
+ * @returns {{ ok: boolean }}
+ */
+function exportArticlePdf(article, { index } = {}) {
+  if (!article) return { ok: false };
+  const html = buildSingleArticlePrintHtml([article]);
+  const filename = `${safeFilenameFromTitle(article.title, index)}.html`;
+  downloadBlob(new Blob([html], { type: "text/html;charset=utf-8" }), filename);
+  printHtmlViaIframe(html);
+  return { ok: true };
+}
+
+/** Multiple articles: one combined HTML file + one print dialog. */
+function exportSelectedArticlesPdfCombined(articles) {
+  if (!articles.length) return { ok: false };
+  const html = buildSingleArticlePrintHtml(articles);
+  const filename =
+    articles.length === 1
+      ? `${safeFilenameFromTitle(articles[0].title)}.html`
+      : `sarpa-${articles.length}-articles.html`;
+  downloadBlob(new Blob([html], { type: "text/html;charset=utf-8" }), filename);
+  printHtmlViaIframe(html);
+  return { ok: true };
 }
 
 function exportDocx(articles) {
@@ -514,6 +566,7 @@ function App() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   const [lastRun, setLastRun] = useState(null);
   const [running, setRunning] = useState(false);
@@ -702,28 +755,60 @@ function App() {
 
   function downloadSelectedArticlesPdf() {
     if (selectedCount === 0) {
+      setNotice("");
       setError("Select one or more articles using the checkboxes, then click PDF.");
       return;
     }
-    setError(
-      selectedCount > 1
-        ? `Opening ${selectedCount} print tabs (one per article). Allow pop-ups, then use Save as PDF in each tab.`
-        : "",
+    setError("");
+    const list = selectedList;
+    const result =
+      list.length === 1
+        ? exportArticlePdf(list[0])
+        : exportSelectedArticlesPdfCombined(list);
+    if (!result.ok) {
+      setNotice("");
+      setError("Could not export PDF for the selected articles.");
+      return;
+    }
+    setNotice(
+      list.length === 1
+        ? PDF_READY_NOTICE
+        : `${list.length} articles in one file. ${PDF_READY_NOTICE}`,
     );
-    exportArticlesPdfIndividually(selectedList);
   }
 
-  function handlePdfToolbarClick() {
+  async function handlePdfToolbarClick() {
+    setNotice("");
+    setError("");
     if (selectedCount > 0) {
       downloadSelectedArticlesPdf();
       return;
     }
-    setError("Select articles with the checkboxes to the left of each title, then click PDF.");
+    setExporting(true);
+    try {
+      const all = await fetchAllForExport();
+      if (all.length === 0) {
+        setError("No articles to export for the current filters.");
+        return;
+      }
+      exportPdf(all);
+      setNotice(PDF_READY_NOTICE);
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setExporting(false);
+    }
   }
 
   function downloadOneArticlePdf(article) {
     setError("");
-    exportArticlesPdf([article]);
+    const result = exportArticlePdf(article);
+    if (!result.ok) {
+      setNotice("");
+      setError("Could not export this article as PDF.");
+      return;
+    }
+    setNotice(PDF_READY_NOTICE);
   }
 
   async function fetchAllForExport() {
@@ -1004,6 +1089,7 @@ function App() {
         </div>
       </section>
 
+      {notice ? <div className="notice">{notice}</div> : null}
       {error ? <div className="error">{error}</div> : null}
 
       {renderPaginationBar()}
@@ -1045,8 +1131,8 @@ function App() {
               onClick={handlePdfToolbarClick}
               title={
                 selectedCount > 0
-                  ? `Download ${selectedCount} selected article(s) as separate PDFs (one tab each)`
-                  : "Select articles with checkboxes, then click to download each as PDF"
+                  ? `Export ${selectedCount} selected article(s) as PDF (HTML download + print dialog)`
+                  : "Export all filtered articles as PDF (HTML download + print dialog)"
               }
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
@@ -1078,7 +1164,7 @@ function App() {
                 onClick={downloadSelectedArticlesPdf}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-                Download each as PDF ({selectedCount})
+                Export selected as PDF ({selectedCount})
               </button>
               <button type="button" className="ghost selectionClearBtn" onClick={clearArticleSelection}>
                 Clear selection
@@ -1167,8 +1253,8 @@ function App() {
                     type="button"
                     className="rowPdfBtn"
                     onClick={() => downloadOneArticlePdf(a)}
-                    title="Download this article as PDF"
-                    aria-label="Download PDF"
+                    title="Export this article as PDF (downloads HTML + opens print dialog)"
+                    aria-label="Export PDF"
                   >
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                   </button>
